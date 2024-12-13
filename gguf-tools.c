@@ -4,12 +4,17 @@
 #include <string.h>
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <math.h>
 #include <inttypes.h>
 
 #include "gguflib.h"
 #include "sds.h"
 #include "fp16.h"
+
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
 
 /* Global options that can could be used for all the subcommands. */
 struct {
@@ -142,7 +147,7 @@ int strmatch(const char *pattern, int patternLen,
 /* ========================== 'show' subcommand ============================= */
 
 void gguf_tools_show(const char *filename) {
-    gguf_ctx *ctx = gguf_open(filename);
+    gguf_ctx *ctx = gguf_open(filename,O_RDONLY|O_BINARY);
     if (ctx == NULL) {
         perror(filename);
         exit(1);
@@ -191,7 +196,7 @@ void gguf_tools_show(const char *filename) {
  * on the weights of the experts with IDs in the array of 'experts_id'.
  * The array must contain 32 integers, one for each layer. */
 void gguf_tools_split_mixtral(int *experts_id, const char *mixtral_filename, const char *output_filename) {
-    gguf_ctx *mixtral = gguf_open(mixtral_filename);
+    gguf_ctx *mixtral = gguf_open(mixtral_filename,O_RDONLY|O_BINARY);
     if (mixtral == NULL) {
         perror(mixtral_filename);
         exit(1);
@@ -332,7 +337,7 @@ void gguf_tools_split_mixtral(int *experts_id, const char *mixtral_filename, con
 /* ====================== 'inspect-weights' subcommand ====================== */
 
 void gguf_tools_inspect_weights(const char *filename, const char *tname, uint64_t count) {
-    gguf_ctx *ctx = gguf_open(filename);
+    gguf_ctx *ctx = gguf_open(filename,O_RDONLY|O_BINARY);
     if (ctx == NULL) {
         perror(filename);
         exit(1);
@@ -454,13 +459,13 @@ int tensors_avg_diff(gguf_tensor *t1, gguf_tensor *t2, double *diff) {
 }
 
 void gguf_tools_compare(const char *file1, const char *file2) {
-    gguf_ctx *ctx1 = gguf_open(file1);
+    gguf_ctx *ctx1 = gguf_open(file1,O_RDONLY|O_BINARY);
     if (ctx1 == NULL) {
         perror(file1);
         exit(1);
     }
 
-    gguf_ctx *ctx2 = gguf_open(file2);
+    gguf_ctx *ctx2 = gguf_open(file2,O_RDONLY|O_BINARY);
     if (ctx2 == NULL) {
         perror(file2);
         exit(1);

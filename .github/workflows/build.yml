@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [linux, mac]
+        os: [linux, mac, win]
         arch: [x64]
         include:
           - os: mac
@@ -31,7 +31,12 @@ jobs:
           cmake --build build -j 4
 
       - name: Test
+        shell: bash
         run: |
           python -m pip install gguf numpy
           python make_gguf.py build/test.gguf
-          ./build/gguf-tools show build/test.gguf
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            ./build/Debug/gguf-tools show build/test.gguf
+          else
+            ./build/gguf-tools show build/test.gguf
+          fi

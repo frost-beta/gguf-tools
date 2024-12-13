@@ -1,18 +1,35 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <sys/mman.h>
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <errno.h>
-#include <unistd.h>
 #include <string.h>
 #include <assert.h>
 #include <inttypes.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
+#ifdef _MSC_VER
+#include <io.h>
+#endif
+
 #include "gguflib.h"
 #include "fp16.h"
 #include "bf16.h"
+
+#ifdef _MSC_VER
+typedef int64_t ssize_t;
+#endif
+
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
 
 /* ============================ Low level functions ========================= */
 
@@ -110,8 +127,8 @@ uint64_t gguf_value_len(uint32_t type, union gguf_value *val) {
 /* =============================== GGUF file API ============================ */
 
 /* Open a GGUF file and return a parsing context. */
-gguf_ctx *gguf_open(const char *filename) {
-    int fd = open(filename,O_RDWR|O_APPEND);
+gguf_ctx *gguf_open(const char *filename, int flags) {
+    int fd = open(filename,flags);
     if (fd == -1) return NULL;
 
     /* Mapping successful. We can create our context object. */
@@ -120,7 +137,7 @@ gguf_ctx *gguf_open(const char *filename) {
     ctx->fd = fd;
     ctx->alignment = 32; // Default alignment of GGUF files.
     ctx->data_off = 0;   // Set later.
-    if (gguf_remap(ctx) == 0) {
+    if (gguf_remap(ctx,(flags & O_RDWR) > 0 ? 1 : 0) == 0) {
         gguf_close(ctx);
         return NULL;
     }
@@ -145,7 +162,37 @@ void gguf_rewind(gguf_ctx *ctx) {
  * whole updated file.
  *
  * Return 1 on success, 0 on error. */
-int gguf_remap(gguf_ctx *ctx) {
+int gguf_remap(gguf_ctx *ctx, int for_write) {
+#ifdef _WIN32
+    HANDLE file = (HANDLE)_get_osfhandle(ctx->fd);
+    if (file == INVALID_HANDLE_VALUE) return 0;
+
+    /* Unmap if the file was already memory mapped. */
+    if (ctx->data) UnmapViewOfFile(ctx->data);
+
+    /* Re-create the file mapping handle. */
+    if (ctx->mapping) CloseHandle(ctx->mapping);
+    ctx->mapping = CreateFileMappingA(file,NULL,for_write ? PAGE_READWRITE : PAGE_READONLY,0,0,NULL);
+    if (ctx->mapping == NULL) return 0;
+
+    /* Get the size of the file to map, then map it. */
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(file,&size)) return 0;
+
+    LPVOID mapped = MapViewOfFile(ctx->mapping,for_write ? FILE_MAP_WRITE : FILE_MAP_READ,0,0,0);
+    if (mapped == NULL) return 0;
+
+    /* Minimal sanity check... */
+    if (size.QuadPart < (signed)sizeof(struct gguf_header) ||
+        memcmp(mapped,"GGUF",4) != 0)
+    {
+        errno = EINVAL;
+        return 0;
+    }
+    ctx->data = mapped;
+    ctx->header = mapped;
+    ctx->size = size.QuadPart;
+#else
     struct stat sb;
 
     /* Unmap if the file was already memory mapped. */
@@ -154,7 +201,7 @@ int gguf_remap(gguf_ctx *ctx) {
     /* Get the size of the file to map, then map it. */
     if (fstat(ctx->fd,&sb) == -1) return 0;
 
-    void *mapped = mmap(0,sb.st_size,PROT_READ|PROT_WRITE,MAP_SHARED,ctx->fd,0);
+    void *mapped = mmap(0,sb.st_size,for_write ? PROT_READ|PROT_WRITE : PROT_READ,MAP_SHARED,ctx->fd,0);
     if (mapped == MAP_FAILED) return 0;
 
     /* Minimal sanity check... */
@@ -167,6 +214,7 @@ int gguf_remap(gguf_ctx *ctx) {
     ctx->data = mapped;
     ctx->header = mapped;
     ctx->size = sb.st_size;
+#endif
     return 1;
 }
 
@@ -174,7 +222,14 @@ int gguf_remap(gguf_ctx *ctx) {
  * and cleanup resources. */
 void gguf_close(gguf_ctx *ctx) {
     if (ctx == NULL) return;
+#ifdef _WIN32
+    if (ctx->data) UnmapViewOfFile(ctx->data);
+#else
     if (ctx->data) munmap(ctx->data,ctx->size);
+#endif
+#ifdef _WIN32
+    if (ctx->mapping) CloseHandle(ctx->mapping);
+#endif
     close(ctx->fd);
     free(ctx);
 }
@@ -449,7 +504,7 @@ gguf_ctx *gguf_create(const char *filename, int flags) {
     hdr.tensor_count = 0;
     hdr.metadata_kv_count = 0;
 
-    FILE *fp = fopen(filename, flags & GGUF_OVERWRITE ? "w" : "wx");
+    FILE *fp = fopen(filename, (flags & GGUF_OVERWRITE) ? "wb" : "wbx");
     if (fp == NULL) return NULL;
     if (fwrite(&hdr,1,sizeof(hdr),fp) != sizeof(hdr)) {
         fclose(fp);
@@ -457,7 +512,7 @@ gguf_ctx *gguf_create(const char *filename, int flags) {
     }
     fclose(fp);
 
-    return gguf_open(filename);
+    return gguf_open(filename,O_RDWR|O_APPEND|O_BINARY);
 }
 
 /* Low level API to append some key-value data to the GGUF file identified
@@ -479,7 +534,7 @@ int gguf_append_kv(gguf_ctx *ctx, const char *keyname, uint64_t keylen, uint32_t
     if (write(ctx->fd,keyname,keylen) != (ssize_t)keylen) return 0;
     if (write(ctx->fd,&type,sizeof(type)) != sizeof(type)) return 0;
     if (write(ctx->fd,val,len) != (ssize_t)len) return 0;
-    if (gguf_remap(ctx) == 0) return 0;
+    if (gguf_remap(ctx,1) == 0) return 0;
     ctx->header->metadata_kv_count++;
     return 1;
 }
@@ -497,7 +552,7 @@ int gguf_append_tensor_info(gguf_ctx *ctx, const char *tensorname, uint64_t name
     }
     if (write(ctx->fd,&type,sizeof(type)) != sizeof(type)) return 0;
     if (write(ctx->fd,&offset,sizeof(offset)) != sizeof(offset)) return 0;
-    if (gguf_remap(ctx) == 0) return 0;
+    if (gguf_remap(ctx,1) == 0) return 0;
     ctx->header->tensor_count++;
     return 1;
 }
@@ -512,7 +567,7 @@ int gguf_append_tensor_data(gguf_ctx *ctx, void *tensor, uint64_t tensor_size) {
     uint64_t padding = gguf_get_alignment_padding(ctx->alignment,ctx->size);
     if (write(ctx->fd,padding_data,padding) != (ssize_t)padding) return 0;
     if (write(ctx->fd,tensor,tensor_size) != (ssize_t)tensor_size) return 0;
-    if (gguf_remap(ctx) == 0) return 0;
+    if (gguf_remap(ctx,1) == 0) return 0;
     return 1;
 }
 

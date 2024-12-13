@@ -110,6 +110,10 @@ union gguf_value {
     double float64;
     uint8_t boolval;
     struct gguf_string string;
+#ifdef _MSC_VER
+#pragma pack(push, 1)
+#define __attribute__(x)
+#endif
     struct {
         // Any value type is valid, including arrays.
         uint32_t type;
@@ -117,6 +121,10 @@ union gguf_value {
         uint64_t len;
         // The array of values follow...
     } __attribute__((packed)) array;
+#ifdef _MSC_VER
+#pragma pack(pop)
+#undef __attribute__
+#endif
 };
 
 // Header
@@ -160,6 +168,9 @@ typedef struct {
 /* The context you get after opening a GGUF file with gguf_init(). */
 typedef struct {
     int fd;
+#ifdef _WIN32
+    void* mapping;
+#endif
     uint8_t *data;  // Memory mapped data.
     uint64_t size;  // Total file size.
     struct gguf_header *header;     // GUFF file header info.
@@ -174,9 +185,9 @@ typedef struct {
 
 /* =============================== Prototypes =============================== */
 
-gguf_ctx *gguf_open(const char *filename);
+gguf_ctx *gguf_open(const char *filename, int flags);
 gguf_ctx *gguf_create(const char *filename, int flags);
-int gguf_remap(gguf_ctx *ctx);
+int gguf_remap(gguf_ctx *ctx, int for_write);
 void gguf_rewind(gguf_ctx *ctx);
 void gguf_close(gguf_ctx *ctx);
 int gguf_get_key(gguf_ctx *ctx, gguf_key *key);

@@ -41,6 +41,14 @@ extern const char *SDS_NOINIT;
 #include <stdint.h>
 
 typedef char *sds;
+#ifdef _MSC_VER
+typedef int64_t ssize_t;
+#endif
+
+#ifdef _MSC_VER
+#pragma pack(push, 1)
+#define __attribute__(x)
+#endif
 
 /* Note: sdshdr5 is never used, we just access the flags byte directly.
  * However is here to document the layout of type 5 SDS strings. */
@@ -72,6 +80,11 @@ struct __attribute__ ((__packed__)) sdshdr64 {
     unsigned char flags; /* 3 lsb of type, 5 unused bits */
     char buf[];
 };
+
+#ifdef _MSC_VER
+#pragma pack(pop)
+#undef __attribute__
+#endif
 
 #define SDS_TYPE_5  0
 #define SDS_TYPE_8  1
