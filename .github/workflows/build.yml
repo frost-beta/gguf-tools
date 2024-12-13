@@ -1,0 +1,37 @@
+name: build
+
+on: push
+
+jobs:
+  build:
+    runs-on: >-
+      ${{
+        (matrix.os == 'mac' && matrix.arch == 'arm64') &&
+          'macos-15' ||
+          (fromJson('{"linux":"ubuntu-22.04","mac":"macos-13","win":"windows-2022"}')[matrix.os])
+      }}
+    continue-on-error: false
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [linux, mac]
+        arch: [x64]
+        include:
+          - os: mac
+            arch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          cmake -B build .
+          cmake --build build -j 4
+
+      - name: Test
+        run: |
+          python -m pip install gguf numpy
+          python make_gguf.py build/test.gguf
+          ./build/gguf-tools show build/test.gguf
